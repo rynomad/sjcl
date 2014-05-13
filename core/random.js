@@ -42,17 +42,17 @@
  * </p>
  */
 sjcl.prng = function(defaultParanoia) {
-  
+
   /* private */
   this._pools                   = [new sjcl.hash.sha256()];
   this._poolEntropy             = [0];
   this._reseedCount             = 0;
   this._robins                  = {};
   this._eventId                 = 0;
-  
+
   this._collectorIds            = {};
   this._collectorIdNext         = 0;
-  
+
   this._strength                = 0;
   this._poolStrength            = 0;
   this._nextReseed              = 0;
@@ -60,12 +60,12 @@ sjcl.prng = function(defaultParanoia) {
   this._counter                 = [0,0,0,0];
   this._cipher                  = undefined;
   this._defaultParanoia         = defaultParanoia;
-  
+
   /* event listener stuff */
   this._collectorsStarted       = false;
   this._callbacks               = {progress: {}, seeded: {}};
   this._callbackI               = 0;
-  
+
   /* constants */
   this._NOT_READY               = 0;
   this._READY                   = 1;
@@ -76,7 +76,7 @@ sjcl.prng = function(defaultParanoia) {
   this._MILLISECONDS_PER_RESEED = 30000;
   this._BITS_PER_RESEED         = 80;
 };
- 
+
 sjcl.prng.prototype = {
   /** Generate several random words, and return them in an array.
    * A word consists of 32 bits (4 bytes)
@@ -84,26 +84,26 @@ sjcl.prng.prototype = {
    */
   randomWords: function (nwords, paranoia) {
     var out = [], i, readiness = this.isReady(paranoia), g;
-  
+
     if (readiness === this._NOT_READY) {
       throw new sjcl.exception.notReady("generator isn't seeded");
     } else if (readiness & this._REQUIRES_RESEED) {
       this._reseedFromPools(!(readiness & this._READY));
     }
-  
+
     for (i=0; i<nwords; i+= 4) {
       if ((i+1) % this._MAX_WORDS_PER_BURST === 0) {
         this._gate();
       }
-   
+
       g = this._gen4words();
       out.push(g[0],g[1],g[2],g[3]);
     }
     this._gate();
-  
+
     return out.slice(0,nwords);
   },
-  
+
   setDefaultParanoia: function (paranoia, allowZeroParanoia) {
     if (paranoia === 0 && allowZeroParanoia !== "Setting paranoia=0 will ruin your security; use it only for testing") {
       throw "Setting paranoia=0 will ruin your security; use it only for testing";
@@ -111,7 +111,7 @@ sjcl.prng.prototype = {
 
     this._defaultParanoia = paranoia;
   },
-  
+
   /**
    * Add entropy to the pools.
    * @param data The entropic value.  Should be a 32-bit integer, array of 32-bit integers, or string
@@ -120,31 +120,37 @@ sjcl.prng.prototype = {
    */
   addEntropy: function (data, estimatedEntropy, source) {
     source = source || "user";
-  
+
     var id,
       i, tmp,
       t = (new Date()).valueOf(),
       robin = this._robins[source],
       oldReady = this.isReady(), err = 0, objName;
-      
+
     id = this._collectorIds[source];
     if (id === undefined) { id = this._collectorIds[source] = this._collectorIdNext ++; }
-      
+
     if (robin === undefined) { robin = this._robins[source] = 0; }
     this._robins[source] = ( this._robins[source] + 1 ) % this._pools.length;
-  
+
     switch(typeof(data)) {
-      
+
     case "number":
       if (estimatedEntropy === undefined) {
         estimatedEntropy = 1;
       }
       this._pools[robin].update([id,this._eventId++,1,estimatedEntropy,t,1,data|0]);
       break;
-      
+
     case "object":
       objName = Object.prototype.toString.call(data);
-      if (objName === "[object Uint32Array]") {
+      if (Buffer.isBuffer(data)){
+        tmp = [];
+        for (i = 0; i < data.length / 4; i++){
+          tmp.push(data.readUInt32LE(i, (i*4) - 1))
+        }
+        data = tmp;
+      } else if (objName === "[object Uint32Array]") {
         tmp = [];
         for (i = 0; i < data.length; i++) {
           tmp.push(data[i]);
@@ -175,7 +181,7 @@ sjcl.prng.prototype = {
         this._pools[robin].update([id,this._eventId++,2,estimatedEntropy,t,data.length].concat(data));
       }
       break;
-      
+
     case "string":
       if (estimatedEntropy === undefined) {
        /* English text has just over 1 bit per character of entropy.
@@ -187,18 +193,18 @@ sjcl.prng.prototype = {
       this._pools[robin].update([id,this._eventId++,3,estimatedEntropy,t,data.length]);
       this._pools[robin].update(data);
       break;
-      
+
     default:
       err=1;
     }
     if (err) {
       throw new sjcl.exception.bug("random: addEntropy only supports number, array of numbers or string");
     }
-  
+
     /* record the new strength */
     this._poolEntropy[robin] += estimatedEntropy;
     this._poolStrength += estimatedEntropy;
-  
+
     /* fire off events */
     if (oldReady === this._NOT_READY) {
       if (this.isReady() !== this._NOT_READY) {
@@ -207,11 +213,11 @@ sjcl.prng.prototype = {
       this._fireEvent("progress", this.getProgress());
     }
   },
-  
+
   /** Is the generator ready? */
   isReady: function (paranoia) {
     var entropyRequired = this._PARANOIA_LEVELS[ (paranoia !== undefined) ? paranoia : this._defaultParanoia ];
-  
+
     if (this._strength && this._strength >= entropyRequired) {
       return (this._poolEntropy[0] > this._BITS_PER_RESEED && (new Date()).valueOf() > this._nextReseed) ?
         this._REQUIRES_RESEED | this._READY :
@@ -222,11 +228,11 @@ sjcl.prng.prototype = {
         this._NOT_READY;
     }
   },
-  
+
   /** Get the generator's progress toward readiness, as a fraction */
   getProgress: function (paranoia) {
     var entropyRequired = this._PARANOIA_LEVELS[ paranoia ? paranoia : this._defaultParanoia ];
-  
+
     if (this._strength >= entropyRequired) {
       return 1.0;
     } else {
@@ -235,11 +241,11 @@ sjcl.prng.prototype = {
         this._poolStrength / entropyRequired;
     }
   },
-  
+
   /** start the built-in entropy collectors */
   startCollectors: function () {
     if (this._collectorsStarted) { return; }
-  
+
     this._eventListener = {
       loadTimeCollector: this._bind(this._loadTimeCollector),
       mouseCollector: this._bind(this._mouseCollector),
@@ -259,14 +265,14 @@ sjcl.prng.prototype = {
     } else {
       throw new sjcl.exception.bug("can't attach event");
     }
-  
+
     this._collectorsStarted = true;
   },
-  
+
   /** stop the built-in entropy collectors */
   stopCollectors: function () {
     if (!this._collectorsStarted) { return; }
-  
+
     if (window.removeEventListener) {
       window.removeEventListener("load", this._eventListener.loadTimeCollector, false);
       window.removeEventListener("mousemove", this._eventListener.mouseCollector, false);
@@ -280,17 +286,17 @@ sjcl.prng.prototype = {
 
     this._collectorsStarted = false;
   },
-  
+
   /* use a cookie to store entropy.
   useCookie: function (all_cookies) {
       throw new sjcl.exception.bug("random: useCookie is unimplemented");
   },*/
-  
+
   /** add an event listener for progress or seeded-ness. */
   addEventListener: function (name, callback) {
     this._callbacks[name][this._callbackI++] = callback;
   },
-  
+
   /** remove an event listener for progress or seeded-ness */
   removeEventListener: function (name, cb) {
     var i, j, cbs=this._callbacks[name], jsTemp=[];
@@ -310,7 +316,7 @@ sjcl.prng.prototype = {
       delete cbs[j];
     }
   },
-  
+
   _bind: function (func) {
     var that = this;
     return function () {
@@ -328,7 +334,7 @@ sjcl.prng.prototype = {
     }
     return this._cipher.encrypt(this._counter);
   },
-  
+
   /* Rekey the AES instance with itself after a request, or every _MAX_WORDS_PER_BURST words.
    * @private
    */
@@ -336,7 +342,7 @@ sjcl.prng.prototype = {
     this._key = this._gen4words().concat(this._gen4words());
     this._cipher = new sjcl.cipher.aes(this._key);
   },
-  
+
   /** Reseed the generator with the given words
    * @private
    */
@@ -348,57 +354,57 @@ sjcl.prng.prototype = {
       if (this._counter[i]) { break; }
     }
   },
-  
+
   /** reseed the data from the entropy pools
    * @param full If set, use all the entropy pools in the reseed.
    */
   _reseedFromPools: function (full) {
     var reseedData = [], strength = 0, i;
-  
+
     this._nextReseed = reseedData[0] =
       (new Date()).valueOf() + this._MILLISECONDS_PER_RESEED;
-    
+
     for (i=0; i<16; i++) {
       /* On some browsers, this is cryptographically random.  So we might
        * as well toss it in the pot and stir...
        */
       reseedData.push(Math.random()*0x100000000|0);
     }
-    
+
     for (i=0; i<this._pools.length; i++) {
      reseedData = reseedData.concat(this._pools[i].finalize());
      strength += this._poolEntropy[i];
      this._poolEntropy[i] = 0;
-   
+
      if (!full && (this._reseedCount & (1<<i))) { break; }
     }
-  
+
     /* if we used the last pool, push a new one onto the stack */
     if (this._reseedCount >= 1 << this._pools.length) {
      this._pools.push(new sjcl.hash.sha256());
      this._poolEntropy.push(0);
     }
-  
+
     /* how strong was this reseed? */
     this._poolStrength -= strength;
     if (strength > this._strength) {
       this._strength = strength;
     }
-  
+
     this._reseedCount ++;
     this._reseed(reseedData);
   },
-  
+
   _keyboardCollector: function () {
     this._addCurrentTimeToEntropy(1);
   },
-  
+
   _mouseCollector: function (ev) {
     var x = ev.x || ev.clientX || ev.offsetX || 0, y = ev.y || ev.clientY || ev.offsetY || 0;
     sjcl.random.addEntropy([x,y], 2, "mouse");
     this._addCurrentTimeToEntropy(0);
   },
-  
+
   _loadTimeCollector: function () {
     this._addCurrentTimeToEntropy(2);
   },
@@ -466,9 +472,20 @@ sjcl.random = new sjcl.prng(6);
 
     // get cryptographically strong entropy depending on runtime environment
     if (typeof module !== 'undefined' && module.exports && (crypt = getCryptoModule()) && crypt.randomBytes) {
-      buf = crypt.randomBytes(1024/8);
-      buf = new Uint32Array(new Uint8Array(buf).buffer);
-      sjcl.random.addEntropy(buf, 1024, "crypto.randomBytes");
+      crypt.randomBytes(128, function(ex, buf) {
+        var buf32 = new Buffer(128)
+        for (var i = 0; i < 32; i++){
+          var h = buf.slice(i*4, i*4+4)
+          var hex = h.toString('hex');
+          var myInt32 = parseInt(hex, 16);
+          buf32.writeUInt32LE(myInt32,i*4)
+        }
+
+        sjcl.random.addEntropy(buf32, 1024, "crypto.randomBytes");
+      })
+
+
+
 
     } else if (window && Uint32Array) {
       ab = new Uint32Array(32);
